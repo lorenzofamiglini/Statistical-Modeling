@@ -1,0 +1,648 @@
+---
+title: "Statistical Modelling"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+library('car')
+library(het.test)
+library(pander)
+library(ggplot2)
+library(olsrr)
+library(lmtest)
+library(stats)
+library(Hmisc)
+library(pander)
+
+set.seed(1234) #-- fisso seme generatore
+df <- read.csv("/Users/lorenzofamiglini/Desktop/Data_Science/Stat_Modelling/Esercitazione_stat_mod_R/DATASET-20190312/car.test.txt",sep=" ")
+VAR_NUMERIC <- c("Price","Mileage","Weight","Disp.") #salvo le variabili numeriche in un vettore
+
+#Visualizzo dataset
+head(df)
+#Dimensione del dataset
+dim(df)
+```
+
+---------------------------------
+ANALISI ESPLORATIVA E DESCRITTIVA
+---------------------------------
+```{r}
+#Scatterplot multivariato
+plot(df[,VAR_NUMERIC],cex=.8)
+#Oppure: versione più completa:
+scatterplotMatrix(df[,VAR_NUMERIC], main="Scatter Plot Matrix")
+#BoxPlot delle distribuzioni delle variabili quantitative
+par(mfrow=c(2,3))
+for(i in VAR_NUMERIC){
+  boxplot(df[,i],main=i,col="lightblue",ylab=i)
+}
+#DISTRIBUZIONE VARIABILE Y
+hist(df$Price, col="grey", # column color
+     border="black",
+     prob = TRUE)
+lines(density(df$Price), # density plot
+      lwd = 2, # thickness of line
+      col = "red")
+#Variabile Esplicativa vs Variabile Dipendente ScatterPlot Interattivo
+library(plotly)
+p <- plot_ly(data = df, x = ~HP, y = ~Price, marker = list(size = 10, color = 'rgba(255,  182, 193, .9)', line = list(color = 'rgba(152, 0, 0, .8)',width = 2))) %>% layout(title = 'Styled Scatter', yaxis = list(zeroline = FALSE), xaxis = list(zeroline = FALSE))
+p
+
+#Analisi Descrittive
+#Matrice di correlazione
+cor(df[,VAR_NUMERIC],method = "pearson")
+cor(df[,VAR_NUMERIC], method = "kendall")
+#Descrizione Variabili
+pander(summary(df[,VAR_NUMERIC],big.mark=","))
+sum(is.na(df)) #CHECK VALORI NULLI 
+
+#Analisi delle classi di frequenza per la nostra variabile target:
+y <- df$Price
+cbind(freq=table(y), percentage=prop.table(table(y))*100) #possiamo farlo anche per le altre variabili
+#Quando abbiamo vari tipi di dati (anche con unità di misura differenti) e vogliamo confrontarli,  indipendentemente dalle loro quantità assolute, dobbiamo utilizzare la deviazione standard:
+lapply(df[,c(2,7,9)], sd)  #ad esempio prendiamo: Price, Weight e HP
+#La serie di Price: oscilla tra ± 4082.936
+#La serie di Weight: oscilla tra ± 495.8661
+#La serie di HP: oscilla tra ± 30.98049
+#Possiamo concludere che le varie osservazioni differiscono di molto, sarebbe consigliata una normalizzazione dei dati oppure centrare le variabili con la funzione scale: 
+s <- as.data.frame(scale(df[,c(2,7,9)])) 
+lapply(s, mean)
+#Testiamo la simmetria (Skewness) di alcune variabili: più siamo lontani da zero e più abbiamo un'asimmetria (positiva o negativa)
+library(e1071)
+skew <- apply(s, 2, skewness) #scalato
+skew2 <- apply(df[,c(2,7,9)], 2, skewness) #la distribuzione risente degli outliers, anche se i dati sono stati centrati. Un buon campanello di allarme per andare a capire se i valori anomali pesano sulla nostra distribuzione. 
+```
+
+-----------------------
+COSTRUZIONE DEL MODELLO
+-----------------------
+```{r}
+mod_lin <- lm(Price ~ Mileage+Weight+Disp., df) 
+summary(mod_lin) #il test t prende in considerazione l'intercetta
+anova(mod_lin) #in questo caso non viene presa in considerazione e mileage è diventata significativa
+```
+Test F -> Il modello ? significativo. 
+Test T -> Weight ? l'unica variabile significativa nel modello 
+Test F anova -> Mileage e Weight sono significative
+R^2 di 0.52, R^2adj di 0.49
+--------------------------------
+ANALISI PRELIMINARI DEL MODELLO: 
+--------------------------------
+
+Global test for the model
+1) Global Stat- Are the relationships between your X predictors and Y roughly linear?. Rejection of the null (p < .05) indicates a non-linear relationship between one or more of your X???s and Y
+
+2) Skewness - Is your distribution skewed positively or negatively, necessitating a transformation to meet the assumption of normality? Rejection of the null (p < .05) indicates that you should likely transform your data.
+
+3) Kurtosis- Is your distribution kurtotic (highly peaked or very shallowly peaked), necessitating a transformation to meet the assumption of normality? Rejection of the null (p < .05) indicates that you should likely transform your data.
+
+4) Link Function- Is your dependent variable truly continuous, or categorical? Rejection of the null (p < .05) indicates that you should use an alternative form of the generalized linear model (e.g. logistic or binomial regression).
+
+5) Heteroscedasticity- Is the variance of your model residuals constant across the range of X (assumption of homoscedastiity)? Rejection of the null (p < .05) indicates that your residuals are heteroscedastic, and thus non-constant across the range of X. Your model is better/worse at predicting for certain ranges of your X scales.
+
+```{r}
+#TEST GLOBALE:
+library(gvlma)
+gvmodel <- gvlma(mod_lin)
+plot(gvmodel)
+summary(gvmodel)
+gvmodel.del <- deletion.gvlma(gvmodel)
+summary(gvmodel.del)
+
+#FORWARD/BACKWARD SELECTION PER TROVARE LA MIGLIORE SEQUENZA DI VARIABILI ESPLICATIVE BASATI SULL'R^2
+library(leaps)
+leaps <-regsubsets(Price ~ Mileage+Weight+Disp., data=df, nbest = 6 ,method = "forward") #guarda solo R^2 ma non la significatività dei parametri.
+plot(leaps, scale="adjr2") 
+#Bisogna guardarlo per riga, ad esempio partendo dalla prima riga in basso, si osserva che solo l'intercetta e disp sono significativi con un R^2 pari a 0.34. Il grafico suggerisce di prendere in considerazione tutti e tre (+ l'intercetta) (ultima riga in alto) evidenziandoli tutti, raggiungendo un r-squared di 0.65. 
+summary(leaps) #lo si può anche vedere da qui 
+
+#
+library(car)
+subsets(leaps, statistic="cp",main="Cp Plot for All Subsets Regression", legend = T)
+abline(1,1,lty=2,col="red") #le coppie che giacciono sulla retta sono le combinazioni migliori
+
+#df$typef <- factor(df$Type)
+#df2 <- df[df$Type %in% c("Small", "Medium","Compact"),]
+#df2$typef <-factor(df2$Type, levels = c("Small","Medium","Compact"), labels = c("S","M", "C"))
+#head(df2)
+#df2$relf <-factor(df2$Reliability, levels = c(2,4,5), labels = c("B","G", "E")) #bad good excellent
+#boxplot(Price ~ typef*Weight,
+ #      data=df2,
+  #   varwidth=TRUE,
+      # col=c("gold","darkgreen"),
+       #main="Price Distribution by Auto Type",
+      # xlab="Auto Type", ylab="Price")
+
+#Price density: 
+d <- density(df$Price)
+x1 = as.data.frame(rnorm(1000, mean = 0, sd = 1))
+plot(d, main="Kernel Density of Price")
+polygon(d, col="grey", border="blue")
+rug(df$Price, col="brown")
+#Un altro modo per vedere se la nostra variabile di interesse ha una distribuzione normale: 
+yplot <- function(x, nbreaks=10) {
+               z <- x
+hist(z, breaks=nbreaks, freq=FALSE,
+     xlab="Price",
+     main="Distribution of dipendent variable", col = "grey")
+rug(jitter(z), col="brown")
+curve(dnorm(x, mean=mean(z), sd=sd(z)),
+      add=TRUE, col="red", lwd=2)
+lines(density(z)$x, density(z)$y,
+      col="black", lwd=2, lty = 2)
+legend("topright",
+       legend = c( "Normal Curve", "Kernel Density Curve"),
+       lty=1:2, col=c("red","black"), cex=.7)
+}
+#Scaled Price vs Price 
+yplot(scale(df$Price))
+yplot(df$Price)
+```
+
+-----------------------
+TEST DELLE PERMUTAZIONI
+-----------------------
+1) Calculate the observed t-statistic, as in the parametric approach; call this t0.
+2) Place all 10 scores in a single group (nel caso in cui la numerosità di y = 10).
+3) Randomly assign five scores to Treatment A and five scores to Treatment B.
+4) Calculate and record the new observed t-statistic.
+5) Repeat steps 3–4 for every possible way of assigning five scores to Treatment A and five scores to Treatment B. There are 252 such possible arrangements.
+6) Arrange the 252 t-statistics in ascending order. This is the empirical distribu- tion, based on (or conditioned on) the sample data.
+7) If t0 falls outside the middle 95% of the empirical distribution, reject the null hypothesis that the population means for the two treatment groups are equal at the 0.05 level of significance.
+
+
+Grazie attraverso le permutazioni possiamo andare a cambiare i nostri valori delle nostre variabili esplicative e vedere se, attraverso (ad esempio) 252 permutazioni, il test t per i parametri è ancora significativo. Quindi non ci limitiamo più a fare un singolo test sui dati che abbiamo, ma molteplici quindi avremmo 252 statistiche, posizionate in modo ascendente, e se il p-value della statistica t iniziale è inferiore a livello di significatività possiamo affermare che l'effettto della variabile non è dovuta al caso e dalla composizione dei dati. Quindi permutando le osservazioni di una variabile e calcolando le varie t-statistics otteniamo una distribuzione empirica totale e se la statistica t0 (quella iniziale senza le permutazioni) cade nelle code allora possiamo affermare che l'effetto di quella variabile non è dovuto dal caso. 
+
+Facciamo un esempio modello normale vs modello con permutazioni: 
+```{r}
+mod1 <- lm(Price ~ Mileage, data = df)
+summary(mod1)
+library(lmPerm)
+fit <- lmp(Price ~ Mileage, data=df, perm="Prob")
+summary(fit)
+```
+
+CROSS-VALIDATION
+```{r}
+shrinkage <- function(model, k = 10){
+  require(bootstrap)
+  
+  theta.fit <- function(x,y){lsfit(x,y)}
+  theta.predict <- function(model, x) {cbind(1,x)%*%model$coef}
+  
+  x <- model$model[,2:ncol(model$model)]
+  y <- model$model[,1]
+  
+  results <- crossval(x,y, theta.fit, theta.predict, ngroup = k)
+  r2 <- cor(y,model$fitted.values)^2
+  r2cv <- cor(y, results$cv.fit)^2
+  cat("Original R-squared =", r2, "\n")
+  cat(k, "Fold Cross-Validated R-squared =", r2cv, "\n")
+  cat("Change =", r2-r2cv, "\n")
+  
+}
+ shrinkage(mod1, 10)
+```
+La cross-validation ci permette di capire quanto i risultati ottenuti dal campione studiato siano generalizzabili alla popolazione. In questo caso studiamo il coefficiente di determinazione, utile per capire se il modello interpreta bene o meno la variabilità. 
+
+
+
+
+-------------------------
+VERIFICO OMOSCHEDASTICITA'
+-------------------------
+1) asse X regressore, asse Y var. target
+```{r}
+plot(df$Mileage, df$Price) #piu o meno omoschedastico
+plot(df$Weight, df$Price) #eteroschedastico
+plot(df$Disp., df$Price) #eteroschedastico
+```
+
+2) asse X valori predetti, asse Y residui 
+```{r}
+plot(mod_lin,which=1) #eteroschedasticit?
+
+#oppure
+plot(fitted(mod_lin),resid(mod_lin),pch=19,xlab="Predicted",ylab="Residuo",type="p",col=1,lwd=2)
+text(fitted(mod_lin),resid(mod_lin),df$Weight,pos=1,cex=.6) #visualizzare nomi/valori associati ad una variabile
+```
+3) Asse X valore previsto asse Y valore osservato
+```{r}
+plot(fitted.values(mod_lin), df$Price) #eteroschedasticit?
+```
+4) asse X regressore, asse Y residui
+```{r}
+plot(df$Mileage, residuals(mod_lin)) #eteroschedastico
+plot(df$Weight, residuals(mod_lin)) #eteroschedastico
+plot(df$Disp., residuals(mod_lin)) #eteroschedastico
+```
+5) Test di White
+```{r}
+white.test <- function(lmod,data=df){
+  u2 <- lmod$residuals^2
+  y <- fitted(lmod)
+  Ru2 <- summary(lm(u2 ~ y + I(y^2)))$r.squared
+  LM <- nrow(data)*Ru2
+  p.value <- 1-pchisq(LM, 2)
+  data.frame("Test statistic"=LM,"P value"=p.value)
+}
+white.test(mod_lin) #pvalue = 0.096 perci? per alfa pari a 0.1 ? eteroschedastico, per alfa=0.05 ? omoschedastico. In generale per alfa >= 0.096 (ad esempio alfa=0.1 ovvero un livello del 90%) l'ipotesi di omoschedasticit? viene rifiutata.
+```
+6) Breusch Pagan Test
+```{r}
+bptest(mod_lin) #p-value = 0.083 perci? per alfa >= 0.083 l'ipotesi di omoschedasticit? viene rifiutata.
+```
+**********************************************************
+COME RISOLVO IL PROBLEMA DELL'ETEROSCHEDASTICITA'? 3 MODI:
+**********************************************************
+1) Provo a eliminare le variabili non significative (backward elimination) e vedo se ho eteroschedasticit?? oppure proviamo a vedere, con una procedura stepwise, quali sono le variabili pi?? utili per spiegare la variabile Y. 
+```{r}
+# Stepwise regression: 
+library(tidyverse)
+library(caret)
+library(leaps)
+library(MASS)
+
+# Fit the full model 
+full.model <- lm(Price ~ Mileage+Weight+Disp., data = df)
+# Stepwise regression model
+step.modelb <- stepAIC(full.model, direction = "backward", 
+                      trace = FALSE)
+step.modelf <- stepAIC(full.model, direction = "forward", 
+                      trace = FALSE)
+step.modelb
+step.modelf
+summary(step.modelb)
+summary(step.modelf)
+
+#Oppure: 
+# Train the model
+train.control <- trainControl(method = "cv", number = 10) #procedura di crossvalidation
+step.modelB <- train(Price ~ Mileage+Weight+Disp., data = df,
+                    method = "leapBackward", 
+                    tuneGrid = data.frame(nvmax = 1:3), #da 1 a 3 variabili
+                    trControl = train.control
+                    )
+step.modelB$results
+#nvmax: the number of variable in the model. For example nvmax = 2, specify the best 2-variables model
+#RMSE and MAE are two different metrics measuring the prediction error of each model. The lower the RMSE and MAE, the better the model.
+#Rsquared indicates the correlation between the observed outcome values and the values predicted by the model. The higher the R squared, the better the model.
+```
+
+2) Cerco gli outlier e verifico se tali valori influenzano la distribuzione dei dati e se disturbano l'andamento della nuvola dei punti.
+
+3) Passo allo stimatore WLS, ma visto che la matrice di var-cov degli errori non ? nota, me la devo stimare con il modello FGLS
+Per calcolare la matrice stimata di varianze e covarianze degli errori, procedo in questo modo:
+Si assume un modello che descriva la varianza degli errori in funzione dei regressori (ad esempio, una forma lineare, quadratica, logaritmica, ecc.), definito modello per l'eteroschedasticit??. Da un punto di vista operativo, cio' equivale ad assumere una relazione fra i residui al quadrato e i regressori. Quindi, si stimano i parametri del modello cosi' specificato
+```{r}
+mod_stima <- lm(resid(mod_lin)^2 ~ Mileage + Weight + Disp., df)
+pander(summary(mod_stima),big.mark=",")
+pander(anova(mod_stima),big.mark=",")
+```
+I valori previsti dei residui al quadrato, ottenuti attraverso la stima del modello mod_stima, rappresentano i valori previsti della varianza.
+
+```{r}
+fitted(mod_stima) #questi sono i valori della varianza stimata (sigma^2 hat). In pratica questo vettore corrisponde alla diagonale principale della matrice di var-cov stimata (pag.13 Vitali)
+#NB CI SONO DEI VALORI NEGATIVI. Questo vuol dire che le osservazioni per le quali la varianza stimata sar? negativa non verranno utilizzate per la stima del modello. Risolveremo questo problema pi? avanti. 
+```
+
+Ora che ho la mia struttura della matrice di var-cov stimata, passo al modello WLS. Ci sono due modi per calcolare questo modello:
+1)Trasformo le variabili di origine Y, X1, X2..., Xk in Y/(sigma hat), X1/(sigma hat), X2/(sigma hat), ..., X3/(sigma hat). Ovvero li divido per la deviazione standard stimata, come prevede il modello WLS (pag.7 Vitali) e stimo il modello con le variabili trasformate con il metodo OLS 
+
+```{r}
+sd_err <- sqrt(fitted(mod_stima))
+mod_WLS1 <- lm(I(Price/sd_err) ~ 0 + I(1/sd_err) + I(Mileage/sd_err) + I(Weight/sd_err) + I(Disp./sd_err), df) #I(1/sd_error) prende il ruolo dell'intercetta
+pander(summary(mod_WLS1),big.mark=",")
+white.test(mod_WLS1) 
+bptest(mod_WLS1)
+```
+
+2) Si applica il metodo dei minimi quadrati pesati (Weighted Least Squares) al modello di origine usando come peso il reciproco dei valori stimati della varianza.
+```{r}
+weight <- 1/fitted(mod_stima)
+mod_WLS2 <- lm(Price ~ Mileage + Weight + Disp., df[-which(weight<0),],weights = weight[-which(weight<0)] ) #I pesi negativi non hanno senso, pertanto ? necessario eliminare le relative osservazioni.
+pander(summary(mod_WLS2),big.mark=",")
+white.test(mod_WLS2) #abbiamo un p-value di 0.076 -> strano.... NB Probabilmente il test di white non ? adatto per un modello FGLS-WLS --> distorta sulla matrice dei residui (essendo ora pesata)
+bptest(mod_WLS2) #abbiamo un p-value di 0.174 -> omoschedasticit?
+```
+NB Sono state utilizzate 56 osservazioni e non 60. Questo perch? 4 valori (precisamente i numero 3,10,14,16) del vettore fitted(mod_stima) sono negativi e una varianza negativa non ha senso quindi il modello WLS non considera quelle 4 osservazioni. Questo ? un limite di questa procedura poich? il fitting peggiora in quanto il modello non utilizza tutti i dati a disposizione. Tuttavia c'? un modo per risolvere questo problema: si propone una nuova stima delle varianze stimate basate su esponenziale FGLS che per propriet? della funzione esponenziale non pu? avere stime con varianze negative.
+```{r}
+mod_stima2 <- lm(log(resid(mod_lin)^2) ~ Mileage + Weight + Disp., df) #Qui uso il logaritmo per annullare l'effetto dell'esponenziale nella prossima riga di codice
+sd_err <- sqrt(exp(fitted(mod_stima2)))
+mod_WLS3 <- lm(I(Price/sd_err) ~ 0 + I(1/sd_err) + I(Mileage/sd_err) + I(Weight/sd_err) + I(Disp./sd_err), df) #I(1/sd_error) prende il ruolo dell'intercetta
+pander(summary(mod_WLS3),big.mark=",")
+```
+ll modello ora usa tutte le osservazioni e migliora il fitting
+
+
+-------------------------
+VERIFICO AUTOCORRELAZIONE
+-------------------------
+1)Distribuzione dei residui
+```{r}
+plot(1:nrow(df),resid(mod_lin),xlab="Observation Index",ylab="Residui",pch=19) #Graficamente non si vede bene la correlazine dei residui. E' piu utile in questo caso il test di dwatson
+abline(h=0,col=2,lwd=3,lty=2)
+```
+
+2) test di darbin-watson
+```{r}
+pander(dwtest(mod_lin),big.mark=",") #essendo la statistica d compresa tra 1 e 3 possiamo affermare che non c'? autocorrelazione seriale di primo ordine tra i residui (ricorda che per d<1 c'? autocorrelazione positiva mentre per d>3 c'? autocorrelazione negativa) In ogni caso non mi aspetto un'autocorrelazione dei residui in quanto non ? una serie temporale (e anche se ci fosse autocorrelazione potrei decidere di non correggerla proprio perch? non ? una serie temporale)
+
+```
+
+3) Analisi del coefficiente di autocorrelazione
+```{r}
+autocorr <- acf(resid(mod_lin),main="Autocorrelazione",lwd=2) #Non ho autocorrelazione infatti il valore di Lag1 ? inferiore alla soglia. Andiamo ora a calcolare con i seguenti codici il valore Lag1 che corrisponde alla correlazione tra i residui e i residui scalati di una posizione
+pander(data.frame(LAG=autocorr$lag,VALUE=autocorr$acf)[1:5,]) #Valori dei coeff. di autocorrelaizone di primo, secondo, terzo e quarto grado.
+
+df1  <- df
+df1$resid <- resid(mod_lin)
+df1$resid_l1 <- Lag(df1$resid,1)
+pander(cor(data.frame(df1$resid,df1$resid_l1),use="pairwise.complete.obs")) #l'autocorrelazione non ? presente (la soglia la fisso a 0.3 o 0.4) perche qui il valore del coefficiente di autocorrelazione di primo grado (Lag1) ?? 0.24
+
+```
+In questo caso non vedremo la procedura con il modello arima per correggere un eventuale autocorrelazione tra residui sia perch? non ? presente autocorrelazione sia perch? il dataset non ? una serie temporale. In questo caso non ha proprio senso parlare di autocorrelazione tra residui... Qui potrei tranquilllamente scambiare le righe del dataset non essendoci una componente temporale. 
+
+---------------------------
+VERIFICO MULTICOLLINEARITA'
+---------------------------
+1) Indice di tolleranza e VIF 
+```{r}
+ols_vif_tol(mod_lin) #Non c'? multicollineareit? perch? VIF<10 anche se Tol(weight) ? vicino a 0
+```
+2) Condition Index
+```{r}
+ols_eigen_cindex(mod_lin) #Come si legge? Devo vedere intanto la colonna Condition Index. Vado nell'ultima riga perch? ha un valore maggiore di 30. In questa riga vedo quali variabili hanno valori vicini a 1. In questo caso Mileage e Weiht hanno 0.82 e 0.83 quindi potrei pensare di levarne una perhce sono un po multicollineari. Tuttavia visto che il vif ? basso (0.3 e 0.5) allora le tengo. Se avessi avuto un vif piu alto avrei potuto levarne una. 
+```
+
+-----------
+LINEAREITA'
+-----------
+1) asse X regressore, asse Y var. target
+```{r}
+plot(df$Mileage, df$Price) #piu o meno lineare
+plot(df$Weight, df$Price) #piu o meno lineare
+plot(df$Disp., df$Price) #pi? o meno lineare
+```
+
+----------
+NORMALITA'
+----------
+1) Statistiche descrittive: corrispondono media mediana e moda?
+```{r}
+summary(residuals(mod_lin)) #media maggiore della mediana, asimmetria positiva
+```
+2) Distribuzione dei residui
+```{r}
+#1 Distribuzione dei residui
+hist(mod_lin$residuals, col="grey", # column color
+     border="black",
+     prob = TRUE) #compute the probability for the density distribution
+lines(density(mod_lin$residuals), # density plot
+      lwd = 2, # thickness of line
+      col = "red")
+
+#Oppure:
+residplot <- function(fit, nbreaks=10) {
+               z <- rstudent(fit)
+hist(z, breaks=nbreaks, freq=FALSE,
+     xlab="Studentized Residual",
+     main="Distribution of Errors")
+rug(jitter(z), col="brown")
+curve(dnorm(x, mean=mean(z), sd=sd(z)),
+      add=TRUE, col="blue", lwd=2)
+lines(density(z)$x, density(z)$y,
+      col="red", lwd=2, lty=2)
+legend("topright",
+       legend = c( "Normal Curve", "Kernel Density Curve"),
+       lty=1:2, col=c("blue","red"), cex=.7)
+}
+residplot(mod_lin)
+```
+3) Distribuzione cumulata dei residui ???
+```{r}
+
+```
+4) P-p plot 
+```{r}
+stdres <- rstandard(mod_lin) #residui standardizzati
+probDist <- pnorm(stdres) #probabilit?? dei residui standardizzati
+plot(ppoints(length(stdres)), sort(probDist), main = "PP-Plot", xlab = "Observed Probability", ylab = "Expected Probability")
+abline(0,1)
+```
+5) Q-q plot
+```{r}
+plot(mod_lin,which=2)
+#oppure
+qqPlot(mod_lin, labels=row.names(states), id.method="identify",
+       simulate=TRUE, main="Q-Q Plot") #Intervallo al 95%
+```
+6) Test di shapiro wilk
+```{r}
+shapiro.test(mod_lin$residuals) #Ipotesi di normalit? rifiutata
+```
+7) Test di kolmogorov-smirnov
+```{r}
+ks.test(residuals(mod_lin), "rnorm") #Ipotesi di normalit? rifiutata
+```
+8) Test della Kurtosis 
+```{r}
+library(normtest)
+kurtosis.norm.test(mod_lin$residuals, nrepl=2000)  #H0 normalit??, p-value < livello alpha: non norm.
+#In questo caso si rifiuta l'ipotesi di normalit?? 
+```
+
+NB: Per risolvere problemi di normalit?? abbiamo la possibilit?? di effettuare delle trasformazioni sulla y:
+    - z = log y, si usa quando abbiamo una distribuzione dell'errore con assimetria positiva 
+    - w = y^2, si usa quando abbiamo una distribuzione dell'errore con assimetria negativa
+    - k = y^(1/2), quando se ?? proporzionale al E(y)
+    - v = 1/y, al crescere di y se cresce significativamente
+    
+*******************************
+RISOLUZIONE PROBLEMA NORMALITA'
+*******************************
+Cerco di risolvere il problema di normalit? adottando una trasformazione di Y. Visto che ho asimmetria positiva, passo a V=log(Y)
+COSTRUZIONE DEL MODELLO LOG
+```{r}
+mod_log <- lm(log(Price) ~ Mileage+Weight+Disp., df) 
+summary(mod_log) #Ho notevolmente incrementato R^2 che ora ? di 0.63 mentre l'R^2adj ? di 0.61. Il modello ? significativo per il test F inoltre sia l'intercetta sia Mileage sia Weight sono significative.
+```
+VERIFICO OMOSCHEDASTICITA'
+```{r}
+white.test(mod_log) #pvalue = 0.3 perci? accetto l'ipotesi di omoschedasticit?
+bptest(mod_log) #pvalue = 0.21 perci? accetto l'ipotesi di omoschedasticit?
+```
+VERIFICO AUTOCORRELAZIONE
+
+```{r}
+pander(dwtest(mod_log),big.mark=",") #la statistica ? compresa tra 1 e 3 perci? non c'? autocorrelazione seriale di primo ordine tra i residui
+```
+VERIFICO MULTICOLLINEARITA'
+```{r}
+ols_vif_tol(mod_log) #Non c'? multicollineareit? 
+```
+NORMALITA'
+```{r}
+shapiro.test(mod_log$residuals) #Ipotesi di normalit? rifiutata
+ks.test(residuals(mod_lin), "rnorm") #Ipotesi di normalit? rifiutata nonostante la trasformazione
+```
+
+--------
+OUTLIERS
+--------
+1) Box Plot uno per ogni regressore
+```{r}
+par(mfrow=c(2,3))
+for(i in VAR_NUMERIC){
+  boxplot(df[,i],main=i,col="lightblue",ylab=i)
+} #C'? Presenza di outliers in Disp., Mileage e Price
+```
+2) asse X regressore, asse Y var. target
+```{r}
+plot(df$Mileage, df$Price) # forse qualche outlier
+plot(df$Weight, df$Price) # forse qualche outlier
+plot(df$Disp., df$Price) # ci sono outliers
+```
+3) Leverage plot
+```{r}
+library(car)
+leveragePlots(mod_lin)
+```
+4) Scatter plot residui standardizzati
+```{r}
+stdres <- rstandard(mod_lin) #residui standardizzati
+plot(stdres)
+abline(-2.5,0, col = "red") + abline(2.5,0, col = "red")
+```
+5) Residuals vs Leverage
+```{r}
+plot(mod_lin,which=5)
+text(mod_lin$residuals)
+```
+6) Distribuzione prima e dopo l'eliminazione degli outliers 
+```{r}
+outlierKD <- function(dt, var) {
+  var_name <- eval(substitute(var),eval(dt))
+  tot <- sum(!is.na(var_name))
+  na1 <- sum(is.na(var_name))
+  m1 <- mean(var_name, na.rm = T)
+  par(mfrow=c(2, 2), oma=c(0,0,3,0))
+  boxplot(var_name, main="With outliers")
+  hist(var_name, main="With outliers", xlab=NA, ylab=NA)
+  outlier <- boxplot.stats(var_name)$out
+  mo <- mean(outlier)
+  var_name <- ifelse(var_name %in% outlier, NA, var_name)
+  boxplot(var_name, main="Without outliers")
+  hist(var_name, main="Without outliers", xlab=NA, ylab=NA)
+  title("Outlier Check", outer=TRUE)
+  na2 <- sum(is.na(var_name))
+  message("Outliers identified: ", na2 - na1, " from ", tot, " observations")
+  message("Proportion (%) of outliers: ", (na2 - na1) / tot*100)
+  message("Mean of the outliers: ", mo)
+  m2 <- mean(var_name, na.rm = T)
+  message("Mean without removing outliers: ", m1)
+  message("Mean if we remove outliers: ", m2)
+  response <- readline(prompt="Do you want to remove outliers and to replace with NA? [yes/no]: ")
+  if(response == "y" | response == "yes"){
+    dt[as.character(substitute(var))] <- invisible(var_name)
+    assign(as.character(as.list(match.call())$dt), dt, envir = .GlobalEnv)
+    message("Outliers successfully removed", "\n")
+    return(invisible(dt))
+  } else{
+    message("Nothing changed", "\n")
+    return(invisible(var_name))
+  }
+}
+source("https://goo.gl/4mthoF")
+
+outlierKD(df, Mileage)
+nrow(df)
+sum(is.na(df))
+```
+!!!ATTENZIONE!!! questa funzione trasforma (inplace = TRUE) gli outliers in NA. 
+
+7) Distanza di Cook Vs Leverage
+```{r}
+plot(mod_lin,which=6)
+```
+
+8) Distanza di Cook
+```{r}
+plot(mod_lin,which=4,pch=19)
+abline(h=4/nrow(df),col="blue",lty=2,lwd=1)
+
+#visualizzo tramite un dataframe i primi 10 outliers in base alla distanza di cook
+library(tidyverse)
+library(broom)
+model.diag.metrics <- augment(mod_lin)
+head(model.diag.metrics)
+model.diag.metrics %>% top_n(10, wt = .cooksd)
+
+```
+
+#Libreria OLSRR per analisi outliers: 
+
+
+Cook???s D Bar Plot
+```{r}
+library(olsrr)
+ols_plot_cooksd_bar(mod_lin)
+```
+Cook???s D Chart
+```{r}
+ols_plot_cooksd_chart(mod_lin) 
+```
+DFBETAS: 
+```{r}
+ols_plot_dfbetas(mod_lin)
+```
+DFFITS
+```{r}
+ols_plot_dffits(mod_lin)
+```
+Studentized Residual Plot Chart
+```{r}
+ols_plot_resid_stand(mod_lin)
+```
+Studentized Residuals vs Leverage Plot
+```{r}
+ols_plot_resid_lev(mod_lin)
+```
+I valori identificati del leverage (in rosso) sono valori non anomali ma che impattano molto sul fitting del modello. 
+
+Deleted Studentized Residual vs Fitted Values Plot
+```{r}
+ols_plot_resid_stud_fit(mod_lin)
+```
+
+```{r}
+ols_plot_resid_stand(mod_lin)
+```
+
+```{r}
+ols_plot_resid_stand(mod_lin)
+```
+
+
+*******************
+ELIMINO GLI OUTLIER
+*******************
+Se vedo che si presenta una doppia distribuzione (bimodale), studio prima come si dispone la nuvola dei punti: variabile dipendente vs regressore, in modo tale da poter rintracciare un'eventuale sottopopolazione ed eliminarla con la creazione di un nuovo dataframe mediante una funzione subset. 
+
+Oppure posso vedere dallo studio degli outlier grafico e di conseguenza eliminare l'osservazione in base all'indice plottato creando un nuovo dataframe del tipo: df2 <- df[-c(),]
+
+
+
+
+
+
+
+
+
+
+
+
+

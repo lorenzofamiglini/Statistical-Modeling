@@ -1,0 +1,505 @@
+---
+title: "Insurance Dataset analysis"
+author: "Lorenzo Famiglini"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  prettydoc::html_pretty:
+    theme: cayman
+course: Foundation of probability and statistics
+---
+
+
+# Descrizione delle variabili: 
+<style>
+div.blue { background-color:#e6f0ff; border-radius: 5px; padding: 20px;}
+</style>
+<div class = "blue">
+
+- Age: età della persona assicurata
+
+- Sex: sesso
+
+- bmi: indice di massa corporea
+
+- Children: numero di figli
+
+- Smoker: indica se la persona fuma o meno
+
+- Region: l'area residenziale del beneficiario negli Stati Uniti
+
+- Charges: Spese mediche individuali fatturate dall'assicurazione
+
+
+</div>
+
+*** 
+
+_La nostra variabile Y oggetto di interesse è_
+
+##### _Charges_
+
+***
+
+```{r,results="hide", warning=FALSE,message=FALSE} 
+
+library(ggplot2)
+library(dplyr)
+library(car)
+library(e1071)
+library(gtools)
+library(lsmeans)
+library(MASS)
+
+```
+
+```{r}
+df <- read.csv("/Users/lorenzofamiglini/Desktop/insurance.csv")
+paste("Missing Values:",sum(is.na(df))) #non ci sono valori mancanti
+paste("Valori nulli:",sum(is.na(df))) #non ci sono valori nulli
+df <- na.omit(df) #elimino le righe con gli NA
+#Osserviamo la struttura del dataset: 
+str(df)
+
+```
+
+
+## Analisi descrittive: 
+Procediamo con delle analisi descrittive della variabile Y
+
+```{r}
+#Alcune statistiche:
+summary(df$charges)
+#calcoliamoci l'asimmetria
+s <- as.data.frame(df$charges)
+paste("Il valore dell'asimmetria e': ", apply(s, 2, skewness))
+#Deviazione standard
+paste("La deviazione standard e': ",sd(df$charges))
+#Differenza Interquantilica: 
+paste("La differenza interquantilica e': ", IQR(df$charges))
+#Coefficiente di variazione:
+paste("Il coefficiente di variazione e': ", (sd(df$charges)/mean(df$charges))*100)
+```
+La media è maggiore della mediana, questo risultato ci suggerisce che esiste un'asimmetria positiva. Oltretutto, la statistica skewness ha valore 1.51.
+
+## Rappresentazioni grafiche:
+
+```{r, fig.width = 7, fig.height = 5}
+#Scatter plot multivariato variabili quantitative: 
+var_numeric <- c("age","bmi","children", "charges")
+
+plot(df[,var_numeric],cex=.8, col = "tomato")
+
+#Vediamo come si distribuisce la nostra y (Densità + Forma)
+yplot <- function(x, nbreaks=10) {
+               z <- x
+hist(z, breaks=nbreaks, freq=FALSE,
+     xlab="Price_charges",
+     main="Distribuzione della variabile dipendente", col = "grey",ylim=c(0,0.0001))
+rug(jitter(z), col="brown")
+curve(dnorm(x, mean=mean(z), sd=sd(z)),
+      add=TRUE, col="red", lwd=2)
+lines(density(z)$x, density(z)$y,
+      col="black", lwd=2, lty = 2)
+legend("topright",
+       legend = c( "Normal Curve", "Kernel Density Curve"),
+       lty=1:2, col=c("red","black"), cex=.7)
+}
+#Densità + Forma
+yplot(df$charges)
+
+
+#Analisi per fumatori e non: 
+ggplot(df, aes(x = charges, fill = smoker)) + 
+ geom_density(size = 0.6, alpha = .3, colour = "black") + 
+ geom_rug(aes(x = charges,y = 0), position = position_jitter(height = 0)) +
+ labs(x = "Costo spese mediche", y =
+"Densita'", fill = "Fumare") +
+ ggtitle("Come si distribuisce y rispetto ai fumatori") 
+
+#Analisi per età:
+df$age_discr <- quantcut(df$age,3) #quantile discretization in 4 bins
+ggplot(df, aes(x = charges, fill = age_discr)) + 
+ geom_density(size = 0.6, alpha = .3, colour = "black") + 
+ geom_rug(aes(x = charges,y = 0), position = position_jitter(height = 0)) +
+ labs(x = "Costo spese mediche", y =
+"Densita'", fill = "Eta' discretizzata") +
+ ggtitle("Come si distribuisce il prezzo rispetto all'età") 
+
+ggplot(df, aes(x = bmi, y = charges, col= smoker)) +
+  geom_point() + 
+  ggtitle("Spese mediche rispetto al livello di massa corporea, divisi per fumatori e non")
+```
+
+Analisi della correlazione: 
+
+```{r, fig.width = 7, fig.height = 5}
+library(corrplot)
+coor <- cor(df[,var_numeric])
+corrplot(coor, method="circle")
+```
+
+Dalle rappresentazioni grafiche emerge che le persone con un costo delle spese mediche superiore ai 18000 circa, presentano una distribuzione pressochè bimodale. Sembrerebbe che hanno delle caratteristiche particolari, creando una sottopopolazione all'interno dei dati. Per esempio, fumatori con un bmi superiore alla media e con un età avanzata, oppure fumatori con un bmi nella media, abbastanza giovani. Dall'analisi della correlazione emerge che la variabile piu' correlata alla variabile y risulta l'età (0.30), quella meno correlata è il numero di figli.
+
+Usiamo il Chi-quadro test per capire se esiste una dipendenza tra le variabili qualitative e la variabile y:
+
+```{r}
+df$price_discr <- quantcut(df$charges,4) #quantile discretization in 4 bins
+
+var_categorical <- c("sex", "smoker", "region", "price_discr")
+df_cat <- df[,c(var_categorical)]
+sex_charg <- table(df_cat$sex, df_cat$price_discr)
+chisq.test(sex_charg) #per alfa pari a 0.01, accetto l'ipotesi nulla 
+smok_charg <- table(df_cat$smoker, df_cat$price_discr)
+chisq.test(smok_charg) #per alfa pari a 0.01, si rigetta l'ipotesi nulla di indipendenza. 
+region_charg <- table(df_cat$region, df_cat$price_discr)
+chisq.test(region_charg) #per alfa pari a 0.01, accetto l'ipotesi nulla 
+```
+
+L'analisi del chi-quadro test ci ha permesso di confermare le ipotesi fatte in precedenza, infatti sussiste una forte dipendenza tra smoker, mentre sex e region (per alfa 0.01) sono indipendenti. 
+Dovremmo eliminare quelle due sottopopolazioni di fumatori con quelle determinate caratteristiche (o con charges > 18000), ma per semplicità non viene fatto, ritenuto non necessario ai fini del progetto.
+
+- Forma logaritmica: 
+
+```{r}
+#Usiamo una forma logaritmica: 
+yplot2 <- function(x, nbreaks=10) {
+               z <- x
+hist(z, breaks=nbreaks, freq=FALSE,
+     xlab="log(Price_charges)",
+     main="Distribuzione della variabile dipendente", col = "tomato")#,ylim=c(0,0.000065
+rug(jitter(z), col="brown")
+curve(dnorm(x, mean=mean(z), sd=sd(z)),
+      add=TRUE, col="blue", lwd=2)
+lines(density(z)$x, density(z)$y,
+      col="black", lwd=2, lty = 2)
+legend("topright",
+       legend = c( "Normal Curve", "Kernel Density Curve"),
+       lty=1:2, col=c("blue","black"), cex=.7)
+}
+yplot2(log(df$charges))
+```
+
+# Test sulla media:
+
+La media campionaria è pari a 13270.42, possiamo dire che la vera media è pari alla media campionaria?
+
+```{r}
+# H0: mu = media campionaria
+library(nortest)
+ch_mean <- mean(df$charges)
+t.test(df$charges, mu = ch_mean)
+t.test(log(df$charges), mu = ch_mean) #rigettiamo l'ipotesi nulla
+```
+
+La media campionaria non è rappresentativa della vera media mu (per alfa 0.05)
+
+Affinchè il test t abbia validita', la variabile y si deve distribuire normalmente, quindi andiamo a studiare la normalità della distribuzione attraverso dei test non parametrici e delle rappresentazioni grafiche: 
+
+```{r}
+qqnorm(df$charges, pch = 1, frame = FALSE, col = "tomato")
+qqline(df$charges, col = "steelblue", lwd = 2)
+```
+
+Presenta una forma leptocurtica con un asimmetria positiva
+
+Test non parametrici: 
+
+```{r}
+shapiro.test(df$charges) #H0: normalità, il test conferma quanto detto in precedenza
+ks.test(df$charges, "rnorm") #H0 rifiutata
+```
+
+Come abbiamo visto in precedenza le spese mediche, con la forma logaritmica, assumono una distribuzione normale (apparentemente), testiamo quanto detto:  
+
+Calcoliamoci l'asimmetria nella con la forma logartimica: 
+```{r}
+s_log<- as.data.frame(log(df$charges))
+paste("Il valore dell'asimmetria e': ", apply(s_log, 2, skewness))
+```
+La skewness è molto vicina allo zero, migliora rispetto alla forma non logaritmica (1.51)
+
+```{r}
+qqnorm(log(df$charges), pch = 1, frame = FALSE, col = "tomato")
+qqline(log(df$charges), col = "steelblue", lwd = 2)
+```
+
+Dal grafico emerge che la distribuzione empirica è più vicina alla distribuzione teorica della normale, con delle code pesanti, questo è dovuto al fatto che ci potrebbero essere outliers. La forma sembrerebbe leggermente platicurtica. 
+Testiamo la variabile trasformata:
+
+```{r}
+shapiro.test(log(df$charges))#Anche se viene rifiutata l'ipotesi nulla, la statistica W è molto vicina a 1
+ks.test(log(df$charges), "rnorm") #ipotesi di normalità respinta
+```
+
+Dato che non sussiste normalità, applichiamo un test non parametrico per sostituire il test t:
+Wilcoxon test, per un campione: 
+
+```{r}
+wilcox.test(df$charges, conf.int = TRUE, mu = ch_mean)
+```
+
+Il test rifiuta l'ipotesi alternativa, e quindi la media campionaria non è rappresentativa della vera media. 
+L'intervallo di confidenza al 95 % è: [10111.59,11308.42]. Quindi i risultati ottenuti dal test t sono distorti, come potevamo immaginare dal fatto che non sussiste normalità e esistono valori anomali.
+
+## Test delle due medie e delle due varianze
+Dovremmo usare il test t, ma all'inizio usiamo quello non parametrico, in modo tale da essere sicuri di non avere distorsioni:
+
+```{r}
+wilcox.test(df$charges~df$sex, conf.int = T, alternative = "less") #non ci sono differenze significative tra le medie dei due gruppi, si accetta l'ipotesi nulla
+wilcox.test(df$charges~df$smoker,  conf.int = T, alternative = "less") #esistono differenza tra gruppi
+
+#Prima di applicare il test t verifichiamo se la varianza tra le varie modalità è uguale o meno: 
+var.test(df$charges~df$sex)
+var.test(df$charges~df$smoker)
+#Sia per sex sia per smoker la differenza è significativa, il p-value < 0.05 e quinidi rigetto l'ipotesi nulla in cui le varianze sono uguali. Perciò applico il test t per verificare se la media tra le varie modalità è significativamente differente, ponendo alla base che la varianza non è uguale:  
+
+#la variabile y non è distribuita normalmente --> potrebbe esserci distorzione:
+t.test(df$charges~df$sex, var.equal = FALSE, alternative = "less") #per alfa a 0.01 dovremmo accettare l'ipotesi nulla, per 0.05 si rigetta
+t.test(df$charges~df$smoker, var.equal = FALSE, alternative = "less") #rigettiamo l'ipotesi nulla
+
+
+#Usiamo il logaritmo: 
+t.test(log(df$charges)~df$sex, var.equal = FALSE,  alternative = "less") #Accettiamo l'ipotesi nulla
+
+
+t.test(log(df$charges)~df$smoker, var.equal = FALSE, alternative = "less") #Rigettiamo l'ipotesi nulla
+#Ci chiediamo se la differenza tra la media dei non fumatori - i fumatori è uguale a zero, o che (h1) la media sia minore di zero e quindi sappiamo se i non fumatori pagano effettivamente di meno 
+
+var.test(log(df$charges)~df$sex) 
+var.test(log(df$charges)~df$smoker)
+
+```
+
+In altre parole, possiamo affermare che la media di charges tra le due sottopopolazioni dei fumatori e non è significativamente differente. Il sesso non è un elemento che influenza la media di charges, quindi tra uomo e donna non sussiste una differenza significativa sui pagamenti. Come  abbiamo visto anche la variabilità è differente, infatti charges varia a seconda della modalità che assume. 
+
+## Anova a una via: Y = Xj dove Xj è una variabile categoriale
+
+Usiamo la forma log-lin, dato che in precedenza abbiamo visto che la distribuzione della y non era normale: 
+
+```{r}
+df$smoker <- as.factor(df$smoker)
+log_smoker <- lm(log(charges) ~ smoker, df)
+summary(log_smoker)
+#ritrasformiamo il logaritmo nel valore precedente
+exp(8.78823)
+```
+
+All'aumento unitario, in media, per i non fumatori il prezzo cresce di 6556.617 (exp(8.79)), mentre ai fumatori costa: il valore dell'intercetta + la differenza tra chi fuma e chi non fuma (exp(1.51)), quindi 6556.617 + 94.957 = 6651.574. 
+Le assunzioni alla base dell'Anova sono varie, tra cui: omogeneità della varianza all'interno dei gruppi (test di barlett), normalità della variabile, linearità, collinearità ecc..
+
+```{r}
+anova(log_smoker)
+
+library(broom)
+dda <- cbind(augment(log_smoker), group = df$smoker)
+sample_var <- "y"
+group_var  <- "group"
+
+ggplot(dda, aes(sample = .resid, colour = group)) +
+  stat_qq() +
+  stat_qq_line()
+```
+
+Le differenze osservate tra i fumatori e non, sono significative, si rigetta l'ipotesi nulla per alfa pari a 0.05
+
+- Analisi dei contrasti: 
+Se almeno uno dei due livelli tra fumatori e non è significativo, allora tutta la variabile diventa significativa. Quale contrasto fa rendere la variabile significativa? 
+
+```{r}
+logls = lsmeans(log_smoker,
+ pairwise ~ smoker,
+ adjust = 'tukey') 
+
+#vediamo i contrasti: 
+logls$contrasts #la differenza tra i fumatori e non è significativa
+
+plot(logls$lsmeans, alpha = .08) #I fumatori presentano un intervallo di confidenza significativamente superiore rispetto a quello dei non fumatori. Infatti, come visto precedentemente, chi fuma in media ha un prezzo delle spese mediche più alto. 
+logls
+```
+
+Le assunzioni alla base tra cui normalità, eteroschedasticità sono state rispettate? Oltretutto, a primo impatto, dall'analisi della correlazione tra i vari regressori, è emerso che non sono in combinazione lineare tra di loro,e quindi potrebbero rispettare (andrebbe testato) l'ipotesi di multicollinearità. 
+
+```{r}
+plot(log_smoker,which=1) #dal grafico emerge che tra i non fumatori c'è molta più variabilità 
+```
+
+Testiamo quanto appena detto: 
+
+#Normalità
+
+```{r}
+summary(residuals(log_smoker)) #la media è minore della mediana, asimmetria negativa
+```
+
+```{r}
+hist(log_smoker$residuals, col="grey",
+     border="black",
+     prob = TRUE, ylim = c(0,0.8)) 
+lines(density(log_smoker$residuals), 
+      lwd = 2,
+      col = "red")
+
+#Dal grafico emerge questa asimmetria
+```
+
+Applichiamo un test non parametrico per testare se i residui si distribuiscono normalmente: 
+
+```{r}
+shapiro.test(log_smoker$residuals) #rigetta l'ipotesi nulla per alfa pari a 0.05, i residui non si distribuiscono normalmente
+```
+
+Dovremmo effettuare delle correzioni, ma ai fini del progetto non sono essenziali. 
+
+Sicuramente ci sono punti anomali che pesano sulla distribuzione dei residui, di conseguenza andiamo a quantificare quanti outliers sono presenti: 
+
+```{r}
+library(olsrr)
+ols_plot_resid_stud_fit(log_smoker) #da qui si notano dei outliers soprattutto nei non fumatori
+```
+
+# Anova a due vie: 
+
+```{r}
+library(coefplot)
+df$age_discr <- as.factor(df$age_discr)
+log_lin <- lm(log(df$charges) ~ df$age_discr + df$smoker)
+
+summary(log_lin)
+
+qqnorm(log_lin$residuals, pch = 1, frame = FALSE, col = "tomato")
+qqline(log_lin$residuals, col = "steelblue", lwd = 2)
+
+```
+Anche in questo modello la distribuzione presenta delle code molto pesanti. 
+
+```{r, message = FALSE, warning = FALSE}
+library("ggpubr")
+ggboxplot(df, x = "smoker", y = "charges", color = "age_discr")
+```
+
+- Senza interazioni:
+
+```{r}
+Anova(lm(log(df$charges) ~ df$age_discr+df$smoker), type = 2)
+```
+
+- Con interazioni: si ipotizza che sussiste un effetto significativo dovuto all'interazione tra la variabile smoker e la variabile età discretizzata. L'effetto di un fattore è influenzato dall'interazione con un altro fattore?
+
+```{r}
+Anova(lm(log(df$charges) ~ df$age_discr*df$smoker), type = 2)
+```
+
+Possiamo affermare che l'effetto dell'interazione tra i due fattori è statisticamente significativo. 
+
+- Analisi dei contrasti, con interazione tra variabili: 
+
+```{r}
+log_linls = lsmeans(log_lin ,list(pairwise ~ smoker|age_discr),
+ adjust = 'tukey')
+plot(log_linls$lsmeans, alpha = .08)
+```
+
+- Modello con tutte le variabili: 
+
+```{r}
+log_tot <- lm(log(df$charges) ~ df$age_discr + df$smoker + df$bmi + df$children + df$region + df$sex)
+summary(log_tot)
+```
+
+Il coefficiente di determinazione R^2 è pari a 0.73, quindi possiamo dire che il modello spiega il 73% della variabilità. Tutti i coefficienti sono significativi tranne per la modalità regionnorthwest che non è significativa per alfa 0.05.
+
+```{r}
+anova(log_tot)
+```
+
+#Testiamo se la differenza tra le medie dei vari fattori è significativamente diversa da zero: 
+
+```{r}
+log_linls3 = lsmeans(log_tot,
+ pairwise~age_discr,
+ adjust = 'tukey')
+log_linls3
+
+log_linls4 = lsmeans(log_tot,
+ pairwise~smoker,
+ adjust = 'tukey')
+log_linls4
+
+log_linls5 = lsmeans(log_tot,
+ pairwise~sex,
+ adjust = 'tukey')
+log_linls5
+plot(log_linls3$lsmeans, alpha = .05)
+plot(log_linls4$lsmeans, alpha = .05)
+plot(log_linls5$lsmeans, alpha = .05)
+```
+
+
+Testiamo la normalità:
+
+```{r}
+qqnorm(log_tot$residuals, pch = 1, frame = FALSE, col = "tomato")
+qqline(log_tot$residuals, col = "steelblue", lwd = 2)
+
+shapiro.test(log_tot$residuals)
+```
+
+La distribuzione non è normale, le code sono molto pesanti, rappresentiamo i residui standardizzati e quelli superiori a + o - 2.5 sono outliers che pesano sulla distribuzione: 
+
+```{r}
+stdres <- rstandard(log_tot) #residui standardizzati
+plot(stdres, ylim = c(-6,6))
+abline(-2.5,0, col = "red") + abline(2.5,0, col = "red")
+```
+
+Come visto già in precedenza, questo dataset presenta delle sottopopolazioni, questo fa si che si riscontrano problemi con la distribuzione. E in più abbiamo uno sbilanciamento dei dati, in cui il 20.48% sono fumatori e il restante 79.52% non sono fumatori, dove all'interno di questa modalità abbiamo una forte variabilità. 
+
+Proviamo a identificare gli outliers ed eliminarli:
+```{r}
+soglia <- 4/((nrow(df)-length(log_tot$coefficients)-1))
+dis_cook <- cooks.distance(log_tot)
+data_cook <- data.frame(dis_cook)
+anomalo <- as.numeric(names(dis_cook)[(dis_cook > soglia)]) 
+no_outdf <- df[ !(row.names(df) %in% c(anomalo)),]  #Sono stati eliminati 75 outliers
+```
+
+```{r}
+lm_fin <- lm(log(charges) ~ age + smoker + bmi + children + region + sex, data = no_outdf)
+summary(lm_fin)
+```
+
+```{r}
+plot(lm_fin)
+```
+
+Le code risultano meno pesate, tuttavia non riusciamo ancora una volta ad ottenere una distribuzione normale. 
+
+```{r}
+anova(lm_fin)
+```
+
+Infine, illustriamo il BoxCox test, per analizzare la relazione (lineare o non) tra la variabile dipendente e i vari regressori: 
+
+```{r}
+bx <- boxcox(df$charges ~ df$age + df$sex + df$smoker + df$bmi + df$region)
+lambda <- bx$x[which.max(bx$y)]
+lambda
+```
+Labmda è pari a 0.18, molto vicino allo zero, quindi la trasformazione logaritmica è stata una buona strategia. 
+
+Studiamo se esistono variabili collineari: 
+```{r}
+ols_vif_tol(lm_fin) #  T --> 1 e VIf < 10 assenza di collinearità 
+```
+
+Studiamo l'ipotesi di omoschedasticità: 
+Breusch-Pagan test
+
+```{r}
+ncvTest(lm_fin) #rifiuto l'ipotesi nulla di omoschedasticità (come era sospettabile dai grafici emersi in precedenza)
+```
+
+
+
